@@ -7,6 +7,8 @@ from typing import Any
 from blake3 import blake3
 from tqdm import tqdm
 
+# Test cases
+
 test_cases = [
     "/media/rhino/invokeai/models/sd-1/embedding/easynegative.safetensors",  # 24.08 KB
     "/media/rhino/invokeai/models/sdxl/main/stable-diffusion-xl-base-1-0/vae/diffusion_pytorch_model.fp16.safetensors",  # 159.58 MB
@@ -15,55 +17,9 @@ test_cases = [
     "/media/rhino/invokeai/models/sdxl/main/dreamshaperXL_v21TurboDPMSDE.safetensors",  # 6.46 GB
 ]
 
+iterations = 5
 
-@dataclass
-class Stats:
-    file_path: str
-    filesize_bytes: int
-    avg_sha1_fast: float
-    std_dev_sha1_fast: float
-    avg_sha1_correct: float
-    std_dev_sha1_correct: float
-    avg_md5: float
-    std_dev_md5: float
-    avg_b3: float
-    std_dev_b3: float
-
-    def __repr__(self):
-        repr = f"File: {self.file_path}\n"
-        repr += f"  File Size: {pretty_file_size(self.filesize_bytes)}\n"
-        repr += f"  SHA1 (Fast): {pretty_time(self.avg_sha1_fast)}, std dev {round(self.std_dev_sha1_fast, 4)}\n"
-        repr += f"  SHA1 (Correct): {pretty_time(self.avg_sha1_correct)}, std dev {round(self.std_dev_sha1_correct, 4)}\n"
-        repr += f"  MD5: {pretty_time(self.avg_md5)}, std dev {round(self.std_dev_md5, 4)}\n"
-        repr += f"  BLAKE3: {pretty_time(self.avg_b3)}, std dev {round(self.std_dev_b3, 4)}\n"
-        return repr
-
-
-def pretty_file_size(bytes: int) -> str:
-    if bytes < 1024:
-        return f"{bytes} B"
-    elif bytes < 1024 * 1024:
-        return f"{round(bytes / 1024, 2)} KB"
-    elif bytes < 1024 * 1024 * 1024:
-        return f"{round(bytes / 1024 / 1024, 2)} MB"
-    else:
-        return f"{round(bytes / 1024 / 1024 / 1024, 2)} GB"
-
-
-def pretty_time(seconds: float) -> str:
-    if seconds < 1:
-        return f"{round(seconds * 1000, 2)} ms"
-    elif seconds < 60:
-        return f"{round(seconds, 2)} s"
-    elif seconds < 3600:
-        return f"{round(seconds / 60, 2)} m"
-    else:
-        return f"{round(seconds / 3600, 2)} h"
-
-
-def calculate_std_dev(numbers: list[int | float]) -> float:
-    return statistics.stdev(numbers)
-
+# Algorithms
 
 # Fast SHA1 - usage of block size means the resultant hashes are incorrect due to padding!
 def get_hash_sha1_fast(file_path: str) -> str:
@@ -102,6 +58,88 @@ def get_hash_b3(file_path: str) -> str:
     return b3_hash
 
 
+# SHA256
+def get_hash_sha256(file_path: str) -> str:
+    file_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        file_hash.update(f.read())
+    sha256_hash = file_hash.hexdigest()
+    return sha256_hash
+
+
+# SHA512
+def get_hash_sha512(file_path: str) -> str:
+    file_hash = hashlib.sha512()
+    with open(file_path, "rb") as f:
+        file_hash.update(f.read())
+    sha512_hash = file_hash.hexdigest()
+    return sha512_hash
+
+
+hash_functions = {
+    "SHA1_fast": get_hash_sha1_fast,
+    "SHA1_correct": get_hash_sha1_correct,
+    "MD5": get_hash_md5,
+    "BLAKE3": get_hash_b3,
+    "SHA256": get_hash_sha256,
+    "SHA512": get_hash_sha512,
+}
+
+# Helpers
+
+def pretty_file_size(bytes: int) -> str:
+    if bytes < 1024:
+        return f"{bytes} B"
+    elif bytes < 1024 * 1024:
+        return f"{round(bytes / 1024, 2)} KB"
+    elif bytes < 1024 * 1024 * 1024:
+        return f"{round(bytes / 1024 / 1024, 2)} MB"
+    else:
+        return f"{round(bytes / 1024 / 1024 / 1024, 2)} GB"
+
+
+def pretty_time(seconds: float) -> str:
+    if seconds < 1:
+        return f"{round(seconds * 1000, 2)} ms"
+    elif seconds < 60:
+        return f"{round(seconds, 2)} s"
+    elif seconds < 3600:
+        return f"{round(seconds / 60, 2)} m"
+    else:
+        return f"{round(seconds / 3600, 2)} h"
+
+
+def calculate_std_dev(numbers: list[int | float]) -> float:
+    return statistics.stdev(numbers)
+
+
+@dataclass
+class AlgoStats:
+    name: str
+    avg: float
+    std_dev: float
+
+    def __repr__(self):
+        return f"{self.name}: {pretty_time(self.avg)}, std dev {round(self.std_dev, 4)}"
+
+
+@dataclass
+class FileStats:
+    file_path: str
+    filesize_bytes: int
+    stats: dict[str, AlgoStats]
+
+    def __repr__(self):
+        max_name_length = max(len(algo_stat.name) for algo_stat in self.stats.values())
+        max_avg_length = max(
+            len(pretty_time(algo_stat.avg)) for algo_stat in self.stats.values()
+        )
+        repr = f"File: {self.file_path} ({pretty_file_size(self.filesize_bytes)})\n"
+        for algo_stat in self.stats.values():
+            repr += f"  {algo_stat.name.ljust(max_name_length + 1)}: {pretty_time(algo_stat.avg).rjust(max_avg_length + 1)} (SD {round(algo_stat.std_dev, 4)})\n"
+        return repr
+
+
 class Timer:
     def __enter__(self):
         self.start = time.perf_counter()
@@ -111,73 +149,61 @@ class Timer:
         self.end = time.perf_counter()
         self.interval = self.end - self.start
 
+# Test!
 
-results_sha1_fast: list[list[float]] = []
-results_sha1_correct: list[list[float]] = []
-results_md5: list[list[float]] = []
-results_b3: list[list[float]] = []
-file_sizes: list[int] = []
+test_cases_with_filesize: list[tuple[str, int]] = [
+    (file, os.path.getsize(file)) for file in test_cases
+]
 
-iterations = 10
+# Dict of hash function names to list of times per file
+results: dict[str, list[list[float]]] = {name: [] for name in hash_functions.keys()}
 
-for file_path in tqdm(test_cases, desc="Overall Progress"):
-    sha1_fast_times: list[float] = []
-    sha1_correct_times: list[float] = []
-    md5_times: list[float] = []
-    b3_times: list[float] = []
-
-    file_size = os.path.getsize(file_path)
-    file_sizes.append(file_size)
+for test_case in tqdm(test_cases_with_filesize, desc="Overall Progress"):
+    file_path, file_size = test_case
+    times: dict[str, list[float]] = {name: [] for name in hash_functions.keys()}
 
     for i in tqdm(
         range(iterations + 1),  #  we'll throw away the first
         desc=f"Hashing {file_path} ({pretty_file_size(file_size)})",
         leave=False,
     ):
-        with Timer() as sha1_fast_timer:
-            get_hash_sha1_fast(file_path)
+        for name, func in hash_functions.items():
+            with Timer() as timer:
+                func(file_path)
 
-        with Timer() as sha1_correct_timer:
-            get_hash_sha1_correct(file_path)
+            # Skip the first result as it is usually an outlier
+            if i != 1:
+                times[name].append(timer.interval)
 
-        with Timer() as md5_timer:
-            get_hash_md5(file_path)
+    for name in hash_functions.keys():
+        results[name].append(times[name])
 
-        with Timer() as b3_timer:
-            get_hash_b3(file_path)
-
-        # Skip the first result as it is usually an outlier
-        if i != 1:
-            sha1_fast_times.append(sha1_fast_timer.interval)
-            sha1_correct_times.append(sha1_correct_timer.interval)
-            md5_times.append(md5_timer.interval)
-            b3_times.append(b3_timer.interval)
-
-    results_sha1_fast.append(sha1_fast_times)
-    results_sha1_correct.append(sha1_correct_times)
-    results_md5.append(md5_times)
-    results_b3.append(b3_times)
-
-avg_sha1_fast = [sum(times) / len(times) for times in results_sha1_fast]
-avg_sha1_correct = [sum(times) / len(times) for times in results_sha1_correct]
-avg_md5 = [sum(times) / len(times) for times in results_md5]
-avg_b3 = [sum(times) / len(times) for times in results_b3]
+# Calculate averages and standard deviations
+averages = {
+    name: [sum(times) / len(times) for times in results[name]]
+    for name in hash_functions.keys()
+}
+std_devs = {
+    name: [calculate_std_dev(times) for times in results[name]]
+    for name in hash_functions.keys()
+}
 
 
+# Generate stats
 stats = [
-    Stats(
-        file_path=test_cases[i],
-        filesize_bytes=file_sizes[i],
-        avg_sha1_fast=avg_sha1_fast[i],
-        std_dev_sha1_fast=calculate_std_dev(results_sha1_fast[i]),
-        avg_sha1_correct=avg_sha1_correct[i],
-        std_dev_sha1_correct=calculate_std_dev(results_sha1_correct[i]),
-        avg_md5=avg_md5[i],
-        std_dev_md5=calculate_std_dev(results_md5[i]),
-        avg_b3=avg_b3[i],
-        std_dev_b3=calculate_std_dev(results_b3[i]),
+    FileStats(
+        file_path=test_cases_with_filesize[i][0],
+        filesize_bytes=test_cases_with_filesize[i][1],
+        stats={
+            name: AlgoStats(
+                name=name,
+                avg=averages[name][i],
+                std_dev=std_devs[name][i],
+            )
+            for name in hash_functions.keys()
+        },
     )
-    for i in range(len(test_cases))
+    for i in range(len(test_cases_with_filesize))
 ]
 
 for s in stats:
