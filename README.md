@@ -2,6 +2,14 @@
 
 Simple script to benchmark file hashing algorithms in python. The files are stable diffusion models.
 
+## Setup
+
+Requires `blake3` and `tqdm`. The rest is python builtins.
+
+```sh
+pip install -r requirements.txt
+```
+
 ## Algorithms
 
 - `SHA1_fast`
