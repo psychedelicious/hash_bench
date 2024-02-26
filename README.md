@@ -31,7 +31,9 @@ To add an algorithm, create a function that hashes a file, returning the hash as
 
 Here are my results. The files are on an external SSD.
 
-```
+`BLAKE3` is by far the fastest for a correct hash. `SHA1_fast` is oodles faster than `BLAKE3` but it's not correct.
+
+```sh
 File: /media/rhino/invokeai/models/sd-1/embedding/easynegative.safetensors (24.08 KB)
   SHA1_fast    :  0.14 ms (SD 0.0001)
   SHA1_correct :   0.1 ms (SD 0.0)
