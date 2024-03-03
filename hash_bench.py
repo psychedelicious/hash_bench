@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 import hashlib
 import os
+from pathlib import Path
 import statistics
 import time
-from typing import Any
+from typing import Any, Callable
 from blake3 import blake3
 from tqdm import tqdm
 
@@ -17,75 +18,78 @@ test_cases = [
     "/media/rhino/invokeai/models/sdxl/main/dreamshaperXL_v21TurboDPMSDE.safetensors",  # 6.46 GB
 ]
 
+
 iterations = 5
 
 # Algorithms
 
-# Fast SHA1 - usage of block size means the resultant hashes are incorrect due to padding!
-def get_hash_sha1_fast(file_path: str) -> str:
-    BLOCK_SIZE = 2**16
-    file_hash = hashlib.sha1()
-    with open(file_path, "rb") as f:
-        data = f.read(BLOCK_SIZE)
-        file_hash.update(data)
-    sha1_hash = file_hash.hexdigest()
-    return sha1_hash
+# TODO - python 3.11 has a better method to hash files: https://docs.python.org/3/library/hashlib.html#file-hashing
 
 
-# Correct SHA1 - python 3.11 has a better method to do this: https://docs.python.org/3/library/hashlib.html#file-hashing
-def get_hash_sha1_correct(file_path: str) -> str:
-    file_hash = hashlib.sha1()
-    with open(file_path, "rb") as f:
-        file_hash.update(f.read())
-    sha1_hash = file_hash.hexdigest()
-    return sha1_hash
+def get_hashlib_mv(algorithm: str) -> Callable[[Path], str]:
+    """Factory that returns a hashlib file hasher for a given algorithm. The file us read into memory in chunks using a memory view."""
+
+    def hasher(file_path: Path) -> str:
+        file_hasher = hashlib.new(algorithm)
+        b = bytearray(128 * 1024)
+        mv = memoryview(b)
+        with open(file_path, "rb", buffering=0) as f:
+            while n := f.readinto(mv):
+                file_hasher.update(mv[:n])
+        return file_hasher.hexdigest()
+
+    return hasher
 
 
-# MD5
-def get_hash_md5(file_path: str) -> str:
-    file_hash = hashlib.md5()
-    with open(file_path, "rb") as f:
-        file_hash.update(f.read())
-    sha1_hash = file_hash.hexdigest()
-    return sha1_hash
+def get_hashlib_naive(algorithm: str) -> Callable[[Path], str]:
+    """Factory that returns a hashlib file hasher for a given algorithm. The file is read into memory in one go."""
+
+    def hasher(file_path: Path) -> str:
+        file_hasher = hashlib.new(algorithm)
+        with open(file_path, "rb") as f:
+            file_hasher.update(f.read())
+        return file_hasher.hexdigest()
+
+    return hasher
 
 
-# BLAKE3 go brrr
-def get_hash_b3(file_path: str) -> str:
+def blake3_mmap(file_path: str) -> str:
+    """Hashes a file using BLAKE3 and memory mapping."""
     file_hasher = blake3(max_threads=blake3.AUTO)
     file_hasher.update_mmap(file_path)
     b3_hash = file_hasher.hexdigest()
     return b3_hash
 
 
-# SHA256
-def get_hash_sha256(file_path: str) -> str:
-    file_hash = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        file_hash.update(f.read())
-    sha256_hash = file_hash.hexdigest()
-    return sha256_hash
+def blake3_mv(file_path: str) -> str:
+    """Hashes a file using BLAKE3 and a memory view."""
+    file_hasher = blake3(max_threads=blake3.AUTO)
 
-
-# SHA512
-def get_hash_sha512(file_path: str) -> str:
-    file_hash = hashlib.sha512()
-    with open(file_path, "rb") as f:
-        file_hash.update(f.read())
-    sha512_hash = file_hash.hexdigest()
-    return sha512_hash
+    b = bytearray(128 * 1024)
+    mv = memoryview(b)
+    with open(file_path, "rb", buffering=0) as f:
+        while n := f.readinto(mv):
+            file_hasher.update(mv[:n])
+    return file_hasher.hexdigest()
 
 
 hash_functions = {
-    "SHA1_fast": get_hash_sha1_fast,
-    "SHA1_correct": get_hash_sha1_correct,
-    "MD5": get_hash_md5,
-    "BLAKE3": get_hash_b3,
-    "SHA256": get_hash_sha256,
-    "SHA512": get_hash_sha512,
+    # "SHA1_naive": get_hashlib_naive("sha1"),
+    # "SHA1_mv": get_hashlib_mv("sha1"),
+    # "MD5_naive": get_hashlib_naive("md5"),
+    # "MD5_mv": get_hashlib_mv("md5"),
+    # "SHA256_naive": get_hashlib_naive("sha256"),
+    # "SHA256_mv": get_hashlib_mv("sha256"),
+    # "SHA512_naive": get_hashlib_naive("sha512"),
+    # "SHA512_mv": get_hashlib_mv("sha512"),
+    # "BLAKE2B_naive": get_hashlib_naive("blake2b"),
+    # "BLAKE2B_mv": get_hashlib_mv("blake2b"),
+    "BLAKE3_mmap": blake3_mmap,
+    "BLAKE3_mv": blake3_mv,
 }
 
 # Helpers
+
 
 def pretty_file_size(bytes: int) -> str:
     if bytes < 1024:
@@ -110,6 +114,8 @@ def pretty_time(seconds: float) -> str:
 
 
 def calculate_std_dev(numbers: list[int | float]) -> float:
+    if len(numbers) < 2:
+        return 0
     return statistics.stdev(numbers)
 
 
@@ -148,6 +154,7 @@ class Timer:
     def __exit__(self, *args: Any):
         self.end = time.perf_counter()
         self.interval = self.end - self.start
+
 
 # Test!
 
